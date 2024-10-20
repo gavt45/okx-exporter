@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/gavt45/okx-exporter/pkg/core"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -55,8 +56,25 @@ func (a *MetricsApp) Start(_ctx context.Context) error {
 	})
 
 	grp.Go(func() error {
+		errs := make(chan error)
+		srv := &http.Server{Addr: fmt.Sprintf("%s:%d", a.cfg.Host, a.cfg.Port)}
+
 		http.Handle("/metrics", promhttp.Handler())
-		return http.ListenAndServe(fmt.Sprintf(":%d", a.cfg.Port), nil)
+
+		go func() {
+			if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+				errs <- err
+			}
+		}()
+
+		select {
+		case <-ctx.Done():
+			// parent context is closed, so we create a new one here
+			ctxTimeout, _ := context.WithTimeout(context.Background(), 5*time.Second)
+			return srv.Shutdown(ctxTimeout)
+		case err := <-errs:
+			return err
+		}
 	})
 
 	return grp.Wait()

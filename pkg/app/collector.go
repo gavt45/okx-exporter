@@ -12,6 +12,7 @@ import (
 	"github.com/gavt45/okx-exporter/pkg/log"
 	"github.com/gorilla/websocket"
 	"github.com/pkg/errors"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -56,6 +57,8 @@ func (a *RecieverApp) connect() error {
 	var err error
 
 	u := url.URL{Scheme: "wss", Host: a.cfg.WSHost, Path: OKX_PUBLIC_PATH}
+
+	log.Debug("Dialing ", u.String())
 	a.conn, _, err = websocket.DefaultDialer.Dial(u.String(), nil)
 	if err != nil {
 		return errors.Wrap(err, "can't dial websocket at "+u.String())
@@ -68,6 +71,8 @@ func (a *RecieverApp) connect() error {
 		return nil
 	})
 
+	log.Debug("Subscribing to updates")
+	a.conn.SetWriteDeadline(time.Now().Add(READ_TIMEOUT))
 	err = a.conn.WriteJSON(&okx.WSRequest{
 		Op: okx.OperationSubscribe,
 		Args: []okx.WSSubscriptionTopic{
@@ -83,80 +88,123 @@ func (a *RecieverApp) connect() error {
 		return errors.Wrap(err, "can't send initial message to "+u.String())
 	}
 
+	log.Debug("Connected to ", u.String())
+
 	return nil
 }
 
-func (a *RecieverApp) reader() error {
-	for {
+func (a *RecieverApp) reader(ctx context.Context) error {
+	done := false
+	for !done {
 		msg := okx.WSData{}
 
 		err := a.conn.ReadJSON(&msg)
 		if err != nil {
+			log.Debug("Got read error: ", err.Error())
 			return err
 		}
 
-		// Try to write and return if channel is closed
+		a.msgs <- msg
+
 		select {
-		case a.msgs <- msg:
+		case <-ctx.Done():
+			done = true
 		default:
+		}
+	}
+
+	log.Debug("Reader exiting")
+
+	return nil
+}
+
+func (a *RecieverApp) pinger(ctx context.Context) error {
+	ticker := time.NewTicker(PING_INTERVAL)
+
+	for {
+		select {
+		case <-ticker.C:
+			// Set write timeout before sending message
+			a.conn.SetWriteDeadline(time.Now().Add(READ_TIMEOUT))
+			log.Debug("Ping")
+			if err := a.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				log.Debug("Got write error: ", err.Error())
+				ticker.Stop()
+				return err
+			}
+		case <-ctx.Done():
+			ticker.Stop()
+			log.Debug("Pinger exiting")
 			return nil
 		}
 	}
 }
 
+func (a *RecieverApp) processor(ctx context.Context) error {
+	for {
+		select {
+		case msg := <-a.msgs:
+			err := a.svc.ProcessMessage(msg)
+			if err != nil {
+				log.Debug("Got process error: ", err.Error())
+				return err
+			}
+		case <-ctx.Done():
+			log.Debug("Processor exiting")
+			return nil
+		}
+	}
+}
+
+func (a *RecieverApp) startProcessing(ctx context.Context) error {
+	g, connCtx := errgroup.WithContext(ctx)
+
+	g.Go(func() error {
+		return a.reader(connCtx)
+	})
+
+	g.Go(func() error {
+		return a.pinger(connCtx)
+	})
+
+	g.Go(func() error {
+		return a.processor(connCtx)
+	})
+
+	return g.Wait()
+}
+
 func (a *RecieverApp) Start(ctx context.Context) error {
 	errs := make(chan error)
-	ticker := time.NewTicker(PING_INTERVAL)
-
-	readerThread := func() { errs <- a.reader() }
-
-	go readerThread()
 
 	go func() {
-		for {
-			select {
-			case <-ticker.C:
-				log.Debug("Ping")
-				if err := a.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-					return
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
+		errs <- a.startProcessing(ctx)
 	}()
 
-	go func() {
-		for {
-			select {
-			case msg := <-a.msgs:
-				err := a.svc.ProcessMessage(msg)
+	for {
+		select {
+		case err := <-errs:
+			// Try to reconnect
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				log.Debug("Collector is handling timeout error: ", err.Error())
+
+				err := a.connect()
 				if err != nil {
-					errs <- err
+					return errors.Wrap(err, "can't connect")
 				}
-			case <-ctx.Done():
-				return
+
+				go func() {
+					errs <- a.startProcessing(ctx)
+				}()
+
+				log.Info("Reconnected")
+			} else {
+				log.Debug("Collector got unknown error: ", err.Error())
+				return err
 			}
+		case <-ctx.Done():
+			return nil
 		}
-	}()
-
-	select {
-	case err := <-errs:
-		// Try to reconnect
-		var netErr net.Error
-		if errors.As(err, &netErr) && netErr.Timeout() {
-			err = a.connect()
-			if err != nil {
-				return errors.Wrap(err, "can't reconnect")
-			}
-
-			go readerThread()
-
-			log.Info("Reconnected")
-		}
-		return err
-	case <-ctx.Done():
-		close(a.msgs)
-		return nil
 	}
 }
