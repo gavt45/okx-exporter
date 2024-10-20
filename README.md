@@ -5,7 +5,7 @@ OKX exchange prometheus exporter
 ## Build
 
 ```bash
-make download build
+make build
 ```
 
 ## Use
