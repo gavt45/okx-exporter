@@ -21,6 +21,14 @@ const (
 	PING_INTERVAL   time.Duration = 10 * time.Second
 )
 
+// Codes we consider irrecoverable, so we will crash when receiving them
+var irrecoverableCodes = map[int]bool{
+	websocket.CloseProtocolError:   true,
+	websocket.CloseUnsupportedData: true,
+	websocket.CloseMessageTooBig:   true,
+	websocket.ClosePolicyViolation: true,
+}
+
 type RecieverApp struct {
 	msgs chan okx.WSData
 
@@ -186,8 +194,10 @@ func (a *RecieverApp) Start(ctx context.Context) error {
 		case err := <-errs:
 			// Try to reconnect
 			var netErr net.Error
-			if errors.As(err, &netErr) && netErr.Timeout() {
-				log.Debug("Collector is handling timeout error: ", err.Error())
+			var closeError websocket.CloseError
+			if (errors.As(err, &netErr) && netErr.Timeout()) ||
+				(errors.As(err, &closeError) && irrecoverableCodes[closeError.Code]) {
+				log.Debug("Collector is handling recoverable error: ", err.Error())
 
 				err := a.connect()
 				if err != nil {
@@ -200,7 +210,7 @@ func (a *RecieverApp) Start(ctx context.Context) error {
 
 				log.Info("Reconnected")
 			} else {
-				log.Debug("Collector got unknown error: ", err.Error())
+				log.Debug("Collector got irrecoveralbe error: ", err.Error())
 				return err
 			}
 		case <-ctx.Done():
