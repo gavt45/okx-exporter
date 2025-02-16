@@ -45,12 +45,12 @@ const (
 
 type WSArgument struct {
 	Channel `json:"channel"`
-	InstId  Instrument `json:"instId,omitempty"`
+	InstID  Instrument `json:"instId,omitempty"`
 }
 
 type WSSubscriptionTopic struct {
 	WSArgument
-	InstId Instrument `json:"instId"`
+	InstID Instrument `json:"instId"`
 }
 
 // WSRequest request to okx wss API
@@ -91,7 +91,7 @@ func (t *TSms) UnmarshalJSON(data []byte) error {
 
 type WSDataTickers struct {
 	InstType string     `json:"instType"`
-	InstId   Instrument `json:"instId"`
+	InstID   Instrument `json:"instId"`
 	Last     string     `json:"last"`
 	High24h  string     `json:"high24h"`
 	Low24h   string     `json:"low24h"`
@@ -118,7 +118,7 @@ const (
 type WSDataTrade struct {
 	FId    string     `json:"fId"`
 	LId    string     `json:"lId"`
-	InstId Instrument `json:"instId,omitempty"`
+	InstID Instrument `json:"instId,omitempty"`
 	PX     string     `json:"px"`
 	Side   `json:"side"`
 	SZ     string `json:"sz"`
@@ -143,7 +143,7 @@ type WSDataCandle struct {
 	Volume float64 `json:"volume"`
 }
 
-var ErrShortCandleDataArray error = errors.New("Candle data array must have at least 6 values")
+var ErrShortCandleDataArray error = errors.New("candle data array must have at least 6 values")
 
 func (c *WSDataCandle) UnmarshalJSON(data []byte) error {
 	var arr []string

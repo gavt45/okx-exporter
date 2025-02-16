@@ -24,7 +24,6 @@ linters:
     - dogsled
     - dupl
     - errcheck
-    - exportloopref
     - exhaustive
     - goconst
     - gocritic
@@ -37,21 +36,21 @@ linters:
     - gosimple
     - govet
     - ineffassign
-    # - misspell
+    - misspell
     - nolintlint
     - nakedret
     - prealloc
     - predeclared
-    # - revive
+    - revive
     - staticcheck
-    - structcheck
-    # - stylecheck
+    - stylecheck
     - thelper
     - tparallel
     - typecheck
     - unconvert
     - unparam
-    - varcheck
+    - unused
+    - copyloopvar
     - whitespace
-    # - wsl
-    # - lll
+    - wsl
+    - lll

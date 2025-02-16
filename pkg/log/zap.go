@@ -84,10 +84,11 @@ func (z *ZapLogger) Debug(args ...interface{}) {
 // NewZapLogger returns new zap logger implementation.
 func NewZapLogger(isDebug bool) (*ZapLogger, error) {
 	var logger *zap.Logger
-	var err error
+
 	const callerSkipCount = 2
 
 	// AddCallerSkip is needed to print real caller, not this file (zap.go).
+	var err error
 	if isDebug {
 		logger, err = zap.NewDevelopment(zap.AddCallerSkip(callerSkipCount))
 	} else {

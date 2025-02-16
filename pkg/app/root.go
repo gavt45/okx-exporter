@@ -3,9 +3,11 @@ package app
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -19,7 +21,7 @@ type App interface {
 }
 
 type MetricsApp struct {
-	reciever *RecieverApp
+	receiver *RecieverApp
 	cfg      core.ServiceConfig
 }
 
@@ -28,7 +30,7 @@ func New(cfg core.ServiceConfig) (App, error) {
 
 	app := &MetricsApp{cfg: cfg}
 
-	app.reciever, err = NewRecieverApp(&cfg.OKX)
+	app.receiver, err = NewRecieverApp(&cfg.OKX)
 	if err != nil {
 		return nil, err
 	}
@@ -52,12 +54,17 @@ func (a *MetricsApp) Start(_ctx context.Context) error {
 	})
 
 	grp.Go(func() error {
-		return a.reciever.Start(ctx)
+		return a.receiver.Start(ctx)
 	})
 
 	grp.Go(func() error {
-		errs := make(chan error)
-		srv := &http.Server{Addr: fmt.Sprintf("%s:%d", a.cfg.Host, a.cfg.Port)}
+		// Capacity 1, so read is not blocked when channel is empty
+		errs := make(chan error, 1)
+		srv := &http.Server{
+			Addr:              net.JoinHostPort(a.cfg.Host, strconv.Itoa(a.cfg.Port)),
+			ReadTimeout:       10 * time.Second,
+			ReadHeaderTimeout: 10 * time.Second,
+		}
 
 		http.Handle("/metrics", promhttp.Handler())
 
@@ -70,7 +77,8 @@ func (a *MetricsApp) Start(_ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			// parent context is closed, so we create a new one here
-			ctxTimeout, _ := context.WithTimeout(context.Background(), 5*time.Second)
+			// ignore cancel here as it is not needed
+			ctxTimeout, _ := context.WithTimeout(context.Background(), 5*time.Second) //nolint:govet
 			return srv.Shutdown(ctxTimeout)
 		case err := <-errs:
 			return err

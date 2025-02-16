@@ -32,8 +32,8 @@ func main() {
 	}
 
 	v := validator.New()
-	err = v.Struct(cfg)
-	if err != nil {
+
+	if err = v.Struct(cfg); err != nil {
 		log.Fatal("Can't load config: ", err.Error())
 		return
 	}

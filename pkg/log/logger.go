@@ -34,6 +34,7 @@ func initIfNull() {
 			log.Fatal(err)
 			return
 		}
+
 		SetLogger(zlog)
 	}
 }

@@ -1,4 +1,3 @@
 package dao
 
-type MetricsRepository interface {
-}
+type MetricsRepository interface{}

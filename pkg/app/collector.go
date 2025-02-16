@@ -3,12 +3,12 @@ package app
 import (
 	"context"
 	"net"
+	"net/http"
 	"net/url"
 	"time"
 
 	"github.com/gavt45/okx-exporter/pkg/core"
 	"github.com/gavt45/okx-exporter/pkg/core/domain/okx"
-	"github.com/gavt45/okx-exporter/pkg/dao"
 	"github.com/gavt45/okx-exporter/pkg/log"
 	"github.com/gorilla/websocket"
 	"github.com/pkg/errors"
@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	OKX_PUBLIC_PATH string        = "/ws/v5/ipublic"
-	READ_TIMEOUT    time.Duration = 15 * time.Second
-	PING_INTERVAL   time.Duration = 10 * time.Second
+	OKXPublicPath string        = "/ws/v5/ipublic"
+	ReadTimeout   time.Duration = 15 * time.Second
+	PingInterval  time.Duration = 10 * time.Second
 )
 
 // Codes we consider irrecoverable, so we will crash when receiving them
@@ -34,7 +34,6 @@ type RecieverApp struct {
 
 	cfg  *core.OKXConfig
 	conn *websocket.Conn
-	repo dao.MetricsRepository
 
 	svc *core.Service
 }
@@ -56,11 +55,6 @@ func NewRecieverApp(cfg *core.OKXConfig) (*RecieverApp, error) {
 	return app, err
 }
 
-func (a *RecieverApp) WithMetricsRepo(repo dao.MetricsRepository) *RecieverApp {
-	a.repo = repo
-	return a
-}
-
 func (a *RecieverApp) subscribeToChannel(instrument okx.Instrument, channel okx.Channel) error {
 	err := a.conn.WriteJSON(&okx.WSRequest{
 		Op: okx.OperationSubscribe,
@@ -69,11 +63,10 @@ func (a *RecieverApp) subscribeToChannel(instrument okx.Instrument, channel okx.
 				WSArgument: okx.WSArgument{
 					Channel: channel,
 				},
-				InstId: instrument,
+				InstID: instrument,
 			},
 		},
 	})
-
 	if err != nil {
 		return errors.Wrap(err, "can't subscribe to "+string(channel))
 	}
@@ -96,23 +89,37 @@ func (a *RecieverApp) subscribeToRequiredChannels() error {
 func (a *RecieverApp) connect() error {
 	var err error
 
-	u := url.URL{Scheme: "wss", Host: a.cfg.WSHost, Path: OKX_PUBLIC_PATH}
+	u := url.URL{Scheme: "wss", Host: a.cfg.WSHost, Path: OKXPublicPath}
 
 	log.Debug("Dialing ", u.String())
-	a.conn, _, err = websocket.DefaultDialer.Dial(u.String(), nil)
-	if err != nil {
+
+	var resp *http.Response
+
+	if a.conn, resp, err = websocket.DefaultDialer.Dial(u.String(), nil); err != nil {
 		return errors.Wrap(err, "can't dial websocket at "+u.String())
 	}
 
-	a.conn.SetReadDeadline(time.Now().Add(READ_TIMEOUT))
+	err = resp.Body.Close()
+	if err != nil {
+		return errors.Wrap(err, "can't close websocket response body")
+	}
+
+	err = a.conn.SetReadDeadline(time.Now().Add(ReadTimeout))
+	if err != nil {
+		return errors.Wrap(err, "can't set read deadline")
+	}
+
 	a.conn.SetPongHandler(func(string) error {
 		log.Debug("Pong")
-		a.conn.SetReadDeadline(time.Now().Add(READ_TIMEOUT))
-		return nil
+		return a.conn.SetReadDeadline(time.Now().Add(ReadTimeout))
 	})
 
 	log.Debug("Subscribing to updates")
-	a.conn.SetWriteDeadline(time.Now().Add(READ_TIMEOUT))
+
+	err = a.conn.SetWriteDeadline(time.Now().Add(ReadTimeout))
+	if err != nil {
+		return errors.Wrap(err, "can't set write deadline")
+	}
 
 	err = a.subscribeToRequiredChannels()
 	if err != nil {
@@ -150,22 +157,28 @@ func (a *RecieverApp) reader(ctx context.Context) error {
 }
 
 func (a *RecieverApp) pinger(ctx context.Context) error {
-	ticker := time.NewTicker(PING_INTERVAL)
+	ticker := time.NewTicker(PingInterval)
 
 	for {
 		select {
 		case <-ticker.C:
 			// Set write timeout before sending message
-			a.conn.SetWriteDeadline(time.Now().Add(READ_TIMEOUT))
+			if err := a.conn.SetWriteDeadline(time.Now().Add(ReadTimeout)); err != nil {
+				return errors.Wrap(err, "can't set write deadline when pinging")
+			}
+
 			log.Debug("Ping")
+
 			if err := a.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				log.Debug("Got write error: ", err.Error())
 				ticker.Stop()
+
 				return err
 			}
 		case <-ctx.Done():
 			ticker.Stop()
 			log.Debug("Pinger exiting")
+
 			return nil
 		}
 	}
@@ -206,7 +219,7 @@ func (a *RecieverApp) startProcessing(ctx context.Context) error {
 }
 
 func (a *RecieverApp) Start(ctx context.Context) error {
-	errs := make(chan error)
+	errs := make(chan error, 1)
 
 	go func() {
 		errs <- a.startProcessing(ctx)
@@ -217,15 +230,15 @@ func (a *RecieverApp) Start(ctx context.Context) error {
 		case err := <-errs:
 			// Try to reconnect
 			var netErr net.Error
-			var closeError *websocket.CloseError = &websocket.CloseError{}
+
+			closeError := &websocket.CloseError{}
 
 			if (errors.As(err, &netErr) && netErr.Timeout()) ||
 				(errors.As(err, &closeError) && !irrecoverableCodes[closeError.Code]) {
 				log.Debug("Collector is handling recoverable error: ", err.Error())
 
-				err := a.connect()
-				if err != nil {
-					return errors.Wrap(err, "can't connect")
+				if cerr := a.connect(); cerr != nil {
+					return errors.Wrap(cerr, "can't connect")
 				}
 
 				go func() {
