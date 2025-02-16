@@ -1,0 +1,57 @@
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - gosec
+        - dupl
+
+run:
+  skip-dirs:
+    - vendor
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+  govet:
+    check-shadowing: true
+    # enable:
+    #   - fieldalignment
+linters:
+  enable:
+    - bodyclose
+    # - depguard
+    - dogsled
+    - dupl
+    - errcheck
+    - exportloopref
+    - exhaustive
+    - goconst
+    - gocritic
+    - gofmt
+    - gofumpt
+    # - goimports
+    # - gomnd # disable magic number detection for now
+    - gocyclo
+    - gosec
+    - gosimple
+    - govet
+    - ineffassign
+    # - misspell
+    - nolintlint
+    - nakedret
+    - prealloc
+    - predeclared
+    # - revive
+    - staticcheck
+    - structcheck
+    # - stylecheck
+    - thelper
+    - tparallel
+    - typecheck
+    - unconvert
+    - unparam
+    - varcheck
+    - whitespace
+    # - wsl
+    # - lll

@@ -61,6 +61,38 @@ func (a *RecieverApp) WithMetricsRepo(repo dao.MetricsRepository) *RecieverApp {
 	return a
 }
 
+func (a *RecieverApp) subscribeToChannel(instrument okx.Instrument, channel okx.Channel) error {
+	err := a.conn.WriteJSON(&okx.WSRequest{
+		Op: okx.OperationSubscribe,
+		Args: []okx.WSSubscriptionTopic{
+			{
+				WSArgument: okx.WSArgument{
+					Channel: channel,
+				},
+				InstId: instrument,
+			},
+		},
+	})
+
+	if err != nil {
+		return errors.Wrap(err, "can't subscribe to "+string(channel))
+	}
+
+	return nil
+}
+
+// subscribeToRequiredChannels subscribes to all channels, required by core app
+func (a *RecieverApp) subscribeToRequiredChannels() error {
+	for _, channel := range a.svc.RequiredChannels() {
+		err := a.subscribeToChannel(okx.InstrumentETHxUSDT, channel)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (a *RecieverApp) connect() error {
 	var err error
 
@@ -81,19 +113,10 @@ func (a *RecieverApp) connect() error {
 
 	log.Debug("Subscribing to updates")
 	a.conn.SetWriteDeadline(time.Now().Add(READ_TIMEOUT))
-	err = a.conn.WriteJSON(&okx.WSRequest{
-		Op: okx.OperationSubscribe,
-		Args: []okx.WSSubscriptionTopic{
-			{
-				WSArgument: okx.WSArgument{
-					Channel: okx.ChannelTickers,
-				},
-				InstId: okx.InstrumentETHxUSDT,
-			},
-		},
-	})
+
+	err = a.subscribeToRequiredChannels()
 	if err != nil {
-		return errors.Wrap(err, "can't send initial message to "+u.String())
+		return errors.Wrap(err, "can't subscribe to required channels on connect")
 	}
 
 	log.Debug("Connected to ", u.String())
@@ -194,9 +217,10 @@ func (a *RecieverApp) Start(ctx context.Context) error {
 		case err := <-errs:
 			// Try to reconnect
 			var netErr net.Error
-			var closeError websocket.CloseError
+			var closeError *websocket.CloseError = &websocket.CloseError{}
+
 			if (errors.As(err, &netErr) && netErr.Timeout()) ||
-				(errors.As(err, &closeError) && irrecoverableCodes[closeError.Code]) {
+				(errors.As(err, &closeError) && !irrecoverableCodes[closeError.Code]) {
 				log.Debug("Collector is handling recoverable error: ", err.Error())
 
 				err := a.connect()
